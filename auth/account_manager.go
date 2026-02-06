@@ -231,8 +231,8 @@ func (am *AccountManager) updateUserInfo(ctx context.Context, account *Account) 
 
 // GetAccount returns an account by email
 func (am *AccountManager) GetAccount(email string) (*Account, error) {
-	am.mu.RLock()
-	defer am.mu.RUnlock()
+	am.mu.Lock()
+	defer am.mu.Unlock()
 
 	account, exists := am.accounts[email]
 	if !exists {
@@ -265,8 +265,8 @@ func (am *AccountManager) ListAccounts() []*Account {
 
 // GetAccountForContext attempts to determine the appropriate account based on context
 func (am *AccountManager) GetAccountForContext(ctx context.Context, hint string) (*Account, error) {
-	am.mu.RLock()
-	defer am.mu.RUnlock()
+	am.mu.Lock()
+	defer am.mu.Unlock()
 
 	// If hint contains an email address, try to match it
 	if strings.Contains(hint, "@") {

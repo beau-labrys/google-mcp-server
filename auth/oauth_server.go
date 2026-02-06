@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,6 +20,7 @@ type OAuthCallbackServer struct {
 	authCodeChan chan string
 	errorChan    chan error
 	port         int
+	oauthState   string
 }
 
 // NewOAuthCallbackServer creates a new OAuth callback server
@@ -63,8 +66,15 @@ func (s *OAuthCallbackServer) StartAndWaitForCallback(ctx context.Context) (*oau
 		}
 	}()
 
-	// Generate auth URL
-	authURL := s.config.AuthCodeURL("state", oauth2.AccessTypeOffline)
+	// Generate cryptographically random state for CSRF protection
+	stateBytes := make([]byte, 32)
+	if _, err := rand.Read(stateBytes); err != nil {
+		return nil, fmt.Errorf("failed to generate OAuth state: %w", err)
+	}
+	s.oauthState = hex.EncodeToString(stateBytes)
+
+	// Generate auth URL with random state
+	authURL := s.config.AuthCodeURL(s.oauthState, oauth2.AccessTypeOffline)
 
 	// Log to stderr to be visible in MCP context
 	fmt.Fprintf(os.Stderr, "\n=== OAuth Authentication Required ===\n")
@@ -110,6 +120,15 @@ func (s *OAuthCallbackServer) StartAndWaitForCallback(ctx context.Context) (*oau
 
 // handleCallback handles the OAuth callback
 func (s *OAuthCallbackServer) handleCallback(w http.ResponseWriter, r *http.Request) {
+	// Validate CSRF state parameter
+	if r.URL.Query().Get("state") != s.oauthState {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
+<html><body><h1>Authentication Failed</h1><p>Invalid state parameter.</p></body></html>`)
+		s.errorChan <- fmt.Errorf("invalid OAuth state parameter")
+		return
+	}
+
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		errMsg := r.URL.Query().Get("error")
@@ -166,8 +185,8 @@ func (s *OAuthCallbackServer) handleCallback(w http.ResponseWriter, r *http.Requ
 
 // handleRoot handles the root path
 func (s *OAuthCallbackServer) handleRoot(w http.ResponseWriter, r *http.Request) {
-	// Generate auth URL
-	authURL := s.config.AuthCodeURL("state", oauth2.AccessTypeOffline)
+	// Generate auth URL with existing state
+	authURL := s.config.AuthCodeURL(s.oauthState, oauth2.AccessTypeOffline)
 
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
@@ -197,7 +216,7 @@ func (s *OAuthCallbackServer) handleRoot(w http.ResponseWriter, r *http.Request)
 
 // GetAuthURL returns the OAuth authorization URL
 func (s *OAuthCallbackServer) GetAuthURL() string {
-	return s.config.AuthCodeURL("state", oauth2.AccessTypeOffline)
+	return s.config.AuthCodeURL(s.oauthState, oauth2.AccessTypeOffline)
 }
 
 // GetCallbackURL returns the callback URL

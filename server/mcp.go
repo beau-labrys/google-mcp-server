@@ -61,6 +61,9 @@ type Resource struct {
 	MimeType    string `json:"mimeType,omitempty"`
 }
 
+// maxMessageSize is the maximum allowed size for a single JSON-RPC message (10MB)
+const maxMessageSize = 10 * 1024 * 1024
+
 // NewMCPServer creates a new MCP server
 func NewMCPServer(cfg *config.Config) *MCPServer {
 	return &MCPServer{
@@ -128,6 +131,9 @@ func (s *NewlineDelimitedStream) ReadObject(v interface{}) error {
 	line, err := s.reader.ReadBytes('\n')
 	if err != nil {
 		return err
+	}
+	if len(line) > maxMessageSize {
+		return fmt.Errorf("message size %d exceeds maximum allowed size %d", len(line), maxMessageSize)
 	}
 	return json.Unmarshal(line, v)
 }
@@ -199,6 +205,14 @@ func (h *Handler) handleInitialize(ctx context.Context, conn *jsonrpc2.Conn, req
 		} `json:"clientInfo"`
 	}
 
+	if req.Params == nil {
+		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+			Code:    jsonrpc2.CodeInvalidParams,
+			Message: "missing parameters",
+		})
+		return
+	}
+
 	if err := json.Unmarshal(*req.Params, &params); err != nil {
 		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeInvalidParams,
@@ -255,6 +269,14 @@ func (h *Handler) handleToolCall(ctx context.Context, conn *jsonrpc2.Conn, req *
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
+	}
+
+	if req.Params == nil {
+		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+			Code:    jsonrpc2.CodeInvalidParams,
+			Message: "missing parameters",
+		})
+		return
 	}
 
 	if err := json.Unmarshal(*req.Params, &params); err != nil {
@@ -360,6 +382,14 @@ func (h *Handler) handleResourceRead(ctx context.Context, conn *jsonrpc2.Conn, r
 		URI string `json:"uri"`
 	}
 
+	if req.Params == nil {
+		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+			Code:    jsonrpc2.CodeInvalidParams,
+			Message: "missing parameters",
+		})
+		return
+	}
+
 	if err := json.Unmarshal(*req.Params, &params); err != nil {
 		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeInvalidParams,
@@ -437,6 +467,14 @@ func (h *Handler) handleCompletion(ctx context.Context, conn *jsonrpc2.Conn, req
 			Name  string `json:"name"`
 			Value string `json:"value"`
 		} `json:"argument"`
+	}
+
+	if req.Params == nil {
+		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+			Code:    jsonrpc2.CodeInvalidParams,
+			Message: "missing parameters",
+		})
+		return
 	}
 
 	if err := json.Unmarshal(*req.Params, &params); err != nil {

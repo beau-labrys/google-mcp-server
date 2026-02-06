@@ -26,6 +26,54 @@ func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
+func TestEscapeDriveQuery(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "no special characters",
+			input:    "test document",
+			expected: "test document",
+		},
+		{
+			name:     "single quote",
+			input:    "it's a test",
+			expected: "it\\'s a test",
+		},
+		{
+			name:     "multiple single quotes",
+			input:    "it's Bob's file",
+			expected: "it\\'s Bob\\'s file",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "only single quote",
+			input:    "'",
+			expected: "\\'",
+		},
+		{
+			name:     "injection attempt",
+			input:    "' or 1=1 or name contains '",
+			expected: "\\' or 1=1 or name contains \\'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := escapeDriveQuery(tt.input)
+			if result != tt.expected {
+				t.Errorf("escapeDriveQuery(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestConvertMarkdownToHTML(t *testing.T) {
 	tests := []struct {
 		name     string

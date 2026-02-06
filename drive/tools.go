@@ -11,6 +11,13 @@ import (
 	"go.ngs.io/google-mcp-server/server"
 )
 
+const (
+	// maxDownloadSize is the maximum allowed file size for downloads (100MB)
+	maxDownloadSize = 100 * 1024 * 1024
+	// maxUploadSize is the maximum allowed content size for uploads (50MB)
+	maxUploadSize = 50 * 1024 * 1024
+)
+
 // Handler implements the ServiceHandler interface for Drive
 type Handler struct {
 	client *Client
@@ -234,7 +241,7 @@ func (h *Handler) GetTools() []server.Tool {
 		},
 		{
 			Name:        "drive_file_delete",
-			Description: "Permanently delete a file",
+			Description: "Permanently delete a file. WARNING: This action is irreversible. You must set confirm=true to proceed.",
 			InputSchema: server.InputSchema{
 				Type: "object",
 				Properties: map[string]server.Property{
@@ -242,8 +249,12 @@ func (h *Handler) GetTools() []server.Tool {
 						Type:        "string",
 						Description: "File ID to delete",
 					},
+					"confirm": {
+						Type:        "boolean",
+						Description: "Must be set to true to confirm permanent deletion",
+					},
 				},
-				Required: []string{"file_id"},
+				Required: []string{"file_id", "confirm"},
 			},
 		},
 		{
@@ -276,7 +287,7 @@ func (h *Handler) GetTools() []server.Tool {
 		},
 		{
 			Name:        "drive_shared_link_create",
-			Description: "Create a shareable link for a file",
+			Description: "Create a shareable link for a file. WARNING: Using type 'anyone' makes the file publicly accessible to anyone with the link.",
 			InputSchema: server.InputSchema{
 				Type: "object",
 				Properties: map[string]server.Property{
@@ -288,6 +299,11 @@ func (h *Handler) GetTools() []server.Tool {
 						Type:        "string",
 						Description: "Permission role (reader, writer, commenter)",
 						Enum:        []string{"reader", "writer", "commenter"},
+					},
+					"type": {
+						Type:        "string",
+						Description: "Permission type. 'anyone' = public link (default), 'user'/'group'/'domain' = restricted",
+						Enum:        []string{"anyone", "user", "group", "domain"},
 					},
 				},
 				Required: []string{"file_id", "role"},
@@ -469,12 +485,13 @@ func (h *Handler) HandleToolCall(ctx context.Context, name string, arguments jso
 
 	case "drive_file_delete":
 		var args struct {
-			FileID string `json:"file_id"`
+			FileID  string `json:"file_id"`
+			Confirm bool   `json:"confirm"`
 		}
 		if err := json.Unmarshal(arguments, &args); err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
-		return h.handleFileDelete(ctx, args.FileID)
+		return h.handleFileDelete(ctx, args.FileID, args.Confirm)
 
 	case "drive_file_trash":
 		var args struct {
@@ -498,11 +515,12 @@ func (h *Handler) HandleToolCall(ctx context.Context, name string, arguments jso
 		var args struct {
 			FileID string `json:"file_id"`
 			Role   string `json:"role"`
+			Type   string `json:"type"`
 		}
 		if err := json.Unmarshal(arguments, &args); err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
-		return h.handleSharedLinkCreate(ctx, args.FileID, args.Role)
+		return h.handleSharedLinkCreate(ctx, args.FileID, args.Role, args.Type)
 
 	case "drive_permissions_list":
 		var args struct {
@@ -567,8 +585,17 @@ func (h *Handler) handleFilesSearch(ctx context.Context, name, mimeType, modifie
 }
 
 func (h *Handler) handleFileDownload(ctx context.Context, fileID string) (interface{}, error) {
+	// Check file size before downloading
+	fileMeta, err := h.client.GetFile(fileID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file metadata: %w", err)
+	}
+	if fileMeta.Size > maxDownloadSize {
+		return nil, fmt.Errorf("file size %d bytes exceeds maximum download size of %d bytes (100MB)", fileMeta.Size, maxDownloadSize)
+	}
+
 	var buf bytes.Buffer
-	err := h.client.DownloadFile(fileID, &buf)
+	err = h.client.DownloadFile(fileID, &buf)
 	if err != nil {
 		return nil, err
 	}
@@ -582,6 +609,11 @@ func (h *Handler) handleFileDownload(ctx context.Context, fileID string) (interf
 }
 
 func (h *Handler) handleFileUpload(ctx context.Context, name, content, mimeType, parentID string) (interface{}, error) {
+	// Check content size before decoding
+	if len(content) > maxUploadSize {
+		return nil, fmt.Errorf("content size %d bytes exceeds maximum upload size of %d bytes (50MB)", len(content), maxUploadSize)
+	}
+
 	// Decode base64 content if needed
 	var reader io.Reader
 	if content != "" {
@@ -651,7 +683,11 @@ func (h *Handler) handleFileCopy(ctx context.Context, fileID, newName string) (i
 	return formatFile(file), nil
 }
 
-func (h *Handler) handleFileDelete(ctx context.Context, fileID string) (interface{}, error) {
+func (h *Handler) handleFileDelete(ctx context.Context, fileID string, confirm bool) (interface{}, error) {
+	if !confirm {
+		return nil, fmt.Errorf("permanent deletion requires confirm=true. This action is irreversible")
+	}
+
 	err := h.client.DeleteFile(fileID)
 	if err != nil {
 		return nil, err
@@ -678,17 +714,24 @@ func (h *Handler) handleFileRestore(ctx context.Context, fileID string) (interfa
 	return map[string]string{"status": "restored", "file_id": fileID}, nil
 }
 
-func (h *Handler) handleSharedLinkCreate(ctx context.Context, fileID, role string) (interface{}, error) {
-	link, err := h.client.CreateShareLink(fileID, role)
+func (h *Handler) handleSharedLinkCreate(ctx context.Context, fileID, role, permType string) (interface{}, error) {
+	link, err := h.client.CreateShareLink(fileID, role, permType)
 	if err != nil {
 		return nil, err
 	}
 
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"file_id": fileID,
 		"link":    link,
 		"role":    role,
-	}, nil
+		"type":    permType,
+	}
+
+	if permType == "" || permType == "anyone" {
+		result["warning"] = "This file is now publicly accessible to anyone with the link"
+	}
+
+	return result, nil
 }
 
 func (h *Handler) handlePermissionsList(ctx context.Context, fileID string) (interface{}, error) {

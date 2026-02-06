@@ -93,23 +93,28 @@ func (c *Client) ListFiles(query string, pageSize int64, parentID string) ([]*dr
 	return fileList.Files, nil
 }
 
+// escapeDriveQuery escapes single quotes in Drive query strings to prevent query injection
+func escapeDriveQuery(s string) string {
+	return strings.ReplaceAll(s, "'", "\\'")
+}
+
 // SearchFiles searches for files
 func (c *Client) SearchFiles(name, mimeType string, modifiedAfter string) ([]*drive.File, error) {
 	query := ""
 	if name != "" {
-		query = fmt.Sprintf("name contains '%s'", name)
+		query = fmt.Sprintf("name contains '%s'", escapeDriveQuery(name))
 	}
 	if mimeType != "" {
 		if query != "" {
 			query += " and "
 		}
-		query += fmt.Sprintf("mimeType = '%s'", mimeType)
+		query += fmt.Sprintf("mimeType = '%s'", escapeDriveQuery(mimeType))
 	}
 	if modifiedAfter != "" {
 		if query != "" {
 			query += " and "
 		}
-		query += fmt.Sprintf("modifiedTime > '%s'", modifiedAfter)
+		query += fmt.Sprintf("modifiedTime > '%s'", escapeDriveQuery(modifiedAfter))
 	}
 
 	return c.ListFiles(query, 100, "")
@@ -273,10 +278,27 @@ func (c *Client) RestoreFile(fileID string) error {
 }
 
 // CreateShareLink creates a shareable link
-func (c *Client) CreateShareLink(fileID string, role string) (string, error) {
+func (c *Client) CreateShareLink(fileID, role, permType string) (string, error) {
+	// Default to "anyone" if not specified
+	if permType == "" {
+		permType = "anyone"
+	}
+
+	// Validate permission type
+	validTypes := map[string]bool{"user": true, "group": true, "domain": true, "anyone": true}
+	if !validTypes[permType] {
+		return "", fmt.Errorf("invalid permission type %q: must be one of user, group, domain, anyone", permType)
+	}
+
+	// Validate role
+	validRoles := map[string]bool{"reader": true, "writer": true, "commenter": true}
+	if !validRoles[role] {
+		return "", fmt.Errorf("invalid role %q: must be one of reader, writer, commenter", role)
+	}
+
 	permission := &drive.Permission{
-		Type: "anyone",
-		Role: role, // "reader", "writer", etc.
+		Type: permType,
+		Role: role,
 	}
 
 	_, err := c.service.Permissions.Create(fileID, permission).Do()
@@ -396,7 +418,6 @@ func convertMarkdownToHTML(markdown string) (string, error) {
 		goldmark.WithRendererOptions(
 			goldmarkhtml.WithHardWraps(), // Preserve line breaks
 			goldmarkhtml.WithXHTML(),     // Generate XHTML
-			goldmarkhtml.WithUnsafe(),    // Allow raw HTML
 		),
 	)
 

@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -24,6 +26,16 @@ type OAuthClient struct {
 	httpClient   *http.Client
 	mu           sync.RWMutex
 	refreshTimer *time.Timer
+	oauthState   string
+}
+
+// generateOAuthState generates a cryptographically random state string for CSRF protection
+func generateOAuthState() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate OAuth state: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // OAuthConfig holds OAuth configuration
@@ -99,6 +111,7 @@ func DefaultScopes() []string {
 		"https://www.googleapis.com/auth/spreadsheets",
 		"https://www.googleapis.com/auth/documents",
 		"https://www.googleapis.com/auth/presentations",
+		"https://www.googleapis.com/auth/tasks",
 		"https://www.googleapis.com/auth/userinfo.email",
 		"https://www.googleapis.com/auth/userinfo.profile",
 	}
@@ -118,8 +131,15 @@ func (c *OAuthClient) GetClientOption() option.ClientOption {
 
 // authenticate performs the OAuth2 authentication flow
 func (c *OAuthClient) authenticate(ctx context.Context) error {
-	// Generate authorization URL
-	authURL := c.config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
+	// Generate cryptographically random state for CSRF protection
+	state, err := generateOAuthState()
+	if err != nil {
+		return fmt.Errorf("failed to generate OAuth state: %w", err)
+	}
+	c.oauthState = state
+
+	// Generate authorization URL with random state
+	authURL := c.config.AuthCodeURL(c.oauthState, oauth2.AccessTypeOffline)
 
 	fmt.Printf("Opening browser for authentication...\n")
 	fmt.Printf("If browser doesn't open, visit this URL:\n%s\n", authURL)
@@ -134,9 +154,16 @@ func (c *OAuthClient) authenticate(ctx context.Context) error {
 	errChan := make(chan error, 1)
 
 	server := &http.Server{
-		Addr:              ":8080",
+		Addr:              "localhost:8080",
 		ReadHeaderTimeout: 10 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Validate CSRF state parameter
+			if r.URL.Query().Get("state") != c.oauthState {
+				errChan <- fmt.Errorf("invalid OAuth state parameter")
+				http.Error(w, "Invalid state parameter", http.StatusBadRequest)
+				return
+			}
+
 			code := r.URL.Query().Get("code")
 			if code == "" {
 				errChan <- fmt.Errorf("no authorization code received")
@@ -359,7 +386,7 @@ func (c *OAuthClient) Revoke(ctx context.Context) error {
 		return err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return err
 	}

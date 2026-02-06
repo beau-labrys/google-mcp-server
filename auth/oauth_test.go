@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,6 +22,7 @@ func TestDefaultScopes(t *testing.T) {
 		"https://www.googleapis.com/auth/spreadsheets",
 		"https://www.googleapis.com/auth/documents",
 		"https://www.googleapis.com/auth/presentations",
+		"https://www.googleapis.com/auth/tasks",
 		"https://www.googleapis.com/auth/userinfo.email",
 		"https://www.googleapis.com/auth/userinfo.profile",
 	}
@@ -77,6 +79,32 @@ func TestNewOAuthClientWithoutAuth(t *testing.T) {
 	_, err := NewOAuthClient(ctx, config)
 	if err == nil {
 		t.Error("Expected error with empty credentials")
+	}
+}
+
+func TestGenerateOAuthState(t *testing.T) {
+	state1, err := generateOAuthState()
+	if err != nil {
+		t.Fatalf("generateOAuthState() returned error: %v", err)
+	}
+
+	// Should be 64 hex characters (32 bytes encoded)
+	if len(state1) != 64 {
+		t.Errorf("Expected state length 64, got %d", len(state1))
+	}
+
+	// Should be valid hex
+	if _, err := hex.DecodeString(state1); err != nil {
+		t.Errorf("State is not valid hex: %v", err)
+	}
+
+	// Two consecutive calls should produce different states
+	state2, err := generateOAuthState()
+	if err != nil {
+		t.Fatalf("second generateOAuthState() returned error: %v", err)
+	}
+	if state1 == state2 {
+		t.Error("Two consecutive calls produced the same state")
 	}
 }
 
