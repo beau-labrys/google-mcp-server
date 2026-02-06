@@ -4,9 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"go.ngs.io/google-mcp-server/server"
 )
+
+// validateID validates a resource ID
+func validateID(id, name string) error {
+	if id == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	if len(id) > 256 {
+		return fmt.Errorf("%s is too long (max 256 characters)", name)
+	}
+	return nil
+}
 
 // Handler implements the ServiceHandler interface for Tasks
 type Handler struct {
@@ -464,6 +476,9 @@ func (h *Handler) handleListTaskLists(ctx context.Context) (interface{}, error) 
 }
 
 func (h *Handler) handleGetTaskList(ctx context.Context, taskListID string) (interface{}, error) {
+	if err := validateID(taskListID, "tasklist_id"); err != nil {
+		return nil, err
+	}
 	taskList, err := h.client.GetTaskList(taskListID)
 	if err != nil {
 		return nil, err
@@ -490,6 +505,9 @@ func (h *Handler) handleCreateTaskList(ctx context.Context, title string) (inter
 }
 
 func (h *Handler) handleUpdateTaskList(ctx context.Context, taskListID, title string) (interface{}, error) {
+	if err := validateID(taskListID, "tasklist_id"); err != nil {
+		return nil, err
+	}
 	taskList, err := h.client.UpdateTaskList(taskListID, title)
 	if err != nil {
 		return nil, err
@@ -503,6 +521,9 @@ func (h *Handler) handleUpdateTaskList(ctx context.Context, taskListID, title st
 }
 
 func (h *Handler) handleDeleteTaskList(ctx context.Context, taskListID string) (interface{}, error) {
+	if err := validateID(taskListID, "tasklist_id"); err != nil {
+		return nil, err
+	}
 	if err := h.client.DeleteTaskList(taskListID); err != nil {
 		return nil, err
 	}
@@ -520,6 +541,9 @@ func (h *Handler) resolveTaskListID(taskListID string) (string, error) {
 			return "", err
 		}
 		return defaultList.Id, nil
+	}
+	if err := validateID(taskListID, "tasklist_id"); err != nil {
+		return "", err
 	}
 	return taskListID, nil
 }
@@ -557,6 +581,9 @@ func (h *Handler) handleListTasks(ctx context.Context, taskListID string, showCo
 }
 
 func (h *Handler) handleGetTask(ctx context.Context, taskListID, taskID string) (interface{}, error) {
+	if err := validateID(taskID, "task_id"); err != nil {
+		return nil, err
+	}
 	resolvedID, err := h.resolveTaskListID(taskListID)
 	if err != nil {
 		return nil, err
@@ -594,6 +621,9 @@ func (h *Handler) handleCreateTask(ctx context.Context, taskListID, title, notes
 }
 
 func (h *Handler) handleUpdateTask(ctx context.Context, taskListID, taskID string, title, notes, due, status *string) (interface{}, error) {
+	if err := validateID(taskID, "task_id"); err != nil {
+		return nil, err
+	}
 	resolvedID, err := h.resolveTaskListID(taskListID)
 	if err != nil {
 		return nil, err
@@ -617,6 +647,9 @@ func (h *Handler) handleUpdateTask(ctx context.Context, taskListID, taskID strin
 }
 
 func (h *Handler) handleDeleteTask(ctx context.Context, taskListID, taskID string) (interface{}, error) {
+	if err := validateID(taskID, "task_id"); err != nil {
+		return nil, err
+	}
 	resolvedID, err := h.resolveTaskListID(taskListID)
 	if err != nil {
 		return nil, err
@@ -634,6 +667,9 @@ func (h *Handler) handleDeleteTask(ctx context.Context, taskListID, taskID strin
 }
 
 func (h *Handler) handleCompleteTask(ctx context.Context, taskListID, taskID string) (interface{}, error) {
+	if err := validateID(taskID, "task_id"); err != nil {
+		return nil, err
+	}
 	resolvedID, err := h.resolveTaskListID(taskListID)
 	if err != nil {
 		return nil, err
@@ -650,6 +686,9 @@ func (h *Handler) handleCompleteTask(ctx context.Context, taskListID, taskID str
 }
 
 func (h *Handler) handleMoveTask(ctx context.Context, taskListID, taskID, parent, previous string) (interface{}, error) {
+	if err := validateID(taskID, "task_id"); err != nil {
+		return nil, err
+	}
 	resolvedID, err := h.resolveTaskListID(taskListID)
 	if err != nil {
 		return nil, err
@@ -686,8 +725,15 @@ func (h *Handler) handleClearCompleted(ctx context.Context, taskListID string) (
 func formatTask(t interface{}) map[string]interface{} {
 	// Use JSON marshal/unmarshal for generic formatting
 	data := make(map[string]interface{})
-	jsonData, _ := json.Marshal(t)
-	_ = json.Unmarshal(jsonData, &data)
+	jsonData, err := json.Marshal(t)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to marshal task data: %v\n", err)
+		return data
+	}
+	if err := json.Unmarshal(jsonData, &data); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to unmarshal task data: %v\n", err)
+		return data
+	}
 
 	// Clean up the response by removing empty fields
 	result := make(map[string]interface{})

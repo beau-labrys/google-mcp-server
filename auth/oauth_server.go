@@ -56,7 +56,10 @@ func (s *OAuthCallbackServer) StartAndWaitForCallback(ctx context.Context) (*oau
 
 	s.server = &http.Server{
 		Handler:           mux,
+		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Start server in background

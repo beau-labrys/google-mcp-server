@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,9 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 )
+
+// tokenRefreshBuffer is how long before expiry to trigger a token refresh
+const tokenRefreshBuffer = 5 * time.Minute
 
 // OAuthClient manages OAuth2 authentication for Google APIs
 type OAuthClient struct {
@@ -187,6 +191,15 @@ func (c *OAuthClient) authenticate(ctx context.Context) error {
 		}
 	}()
 
+	// Ensure server is always shut down, even on error/timeout paths
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to shutdown callback server: %v\n", err)
+		}
+	}()
+
 	// Wait for authorization code or error
 	var code string
 	select {
@@ -194,13 +207,8 @@ func (c *OAuthClient) authenticate(ctx context.Context) error {
 		// Success
 	case err := <-errChan:
 		return err
-	case <-time.After(5 * time.Minute):
+	case <-time.After(tokenRefreshBuffer):
 		return fmt.Errorf("authentication timeout")
-	}
-
-	// Shut down the server
-	if err := server.Shutdown(ctx); err != nil {
-		fmt.Printf("Warning: failed to shutdown callback server: %v\n", err)
 	}
 
 	// Exchange authorization code for token
@@ -225,11 +233,24 @@ func (c *OAuthClient) authenticate(ctx context.Context) error {
 
 // loadToken loads the OAuth token from file
 func (c *OAuthClient) loadToken() error {
+	// Check file permissions before reading (token files should be 0600)
+	info, err := os.Stat(c.tokenFile)
+	if err != nil {
+		return err
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		return fmt.Errorf("token file %s has insecure permissions %o (expected 0600)", c.tokenFile, perm)
+	}
+
 	file, err := os.Open(c.tokenFile)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = file.Close() }()
+	defer func() {
+		if err := file.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close token file: %v\n", err)
+		}
+	}()
 
 	token := &oauth2.Token{}
 	if err := json.NewDecoder(file).Decode(token); err != nil {
@@ -299,8 +320,8 @@ func (c *OAuthClient) startTokenRefresh(ctx context.Context) {
 		return
 	}
 
-	// Refresh token 5 minutes before expiry
-	refreshTime := timeUntilExpiry - 5*time.Minute
+	// Refresh token before expiry
+	refreshTime := timeUntilExpiry - tokenRefreshBuffer
 	if refreshTime <= 0 {
 		refreshTime = 1 * time.Second
 	}
@@ -342,25 +363,21 @@ func (c *OAuthClient) refreshToken(ctx context.Context) {
 	// Schedule next refresh
 	// Check if token is already expired
 	timeUntilExpiry := time.Until(c.token.Expiry)
-	if timeUntilExpiry <= 0 {
-		// Token already expired again, refresh immediately
-		c.mu.Unlock()
-		go func() {
-			// Small delay to ensure current function completes
-			time.Sleep(100 * time.Millisecond)
-			c.refreshToken(ctx)
-		}()
-		return
-	}
 
 	// Set up timer for next refresh (while still holding the lock)
 	if c.refreshTimer != nil {
 		c.refreshTimer.Stop()
 	}
 
-	refreshTime := timeUntilExpiry - 5*time.Minute
-	if refreshTime <= 0 {
+	// Use time.AfterFunc instead of recursive goroutine to avoid cascading
+	var refreshTime time.Duration
+	if timeUntilExpiry <= 0 {
 		refreshTime = 1 * time.Second
+	} else {
+		refreshTime = timeUntilExpiry - tokenRefreshBuffer
+		if refreshTime <= 0 {
+			refreshTime = 1 * time.Second
+		}
 	}
 
 	c.refreshTimer = time.AfterFunc(refreshTime, func() {
@@ -369,7 +386,7 @@ func (c *OAuthClient) refreshToken(ctx context.Context) {
 	c.mu.Unlock()
 }
 
-// Revoke revokes the current OAuth token
+// Revoke revokes the current OAuth token (both access and refresh tokens)
 func (c *OAuthClient) Revoke(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -378,19 +395,19 @@ func (c *OAuthClient) Revoke(ctx context.Context) error {
 		return nil
 	}
 
-	// Revoke token via Google API
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		fmt.Sprintf("https://oauth2.googleapis.com/revoke?token=%s", c.token.AccessToken),
-		nil)
-	if err != nil {
-		return err
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+
+	// Revoke access token via POST body (not URL query to avoid proxy/log leaks)
+	if err := revokeToken(ctx, httpClient, c.token.AccessToken); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to revoke access token: %v\n", err)
 	}
 
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
-	if err != nil {
-		return err
+	// Also revoke refresh token to prevent continued access
+	if c.token.RefreshToken != "" {
+		if err := revokeToken(ctx, httpClient, c.token.RefreshToken); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to revoke refresh token: %v\n", err)
+		}
 	}
-	defer func() { _ = resp.Body.Close() }()
 
 	// Remove local token file
 	if err := os.Remove(c.tokenFile); err != nil && !os.IsNotExist(err) {
@@ -399,6 +416,32 @@ func (c *OAuthClient) Revoke(ctx context.Context) error {
 
 	c.token = nil
 	c.httpClient = nil
+
+	return nil
+}
+
+// revokeToken revokes a single token via Google's revocation endpoint using POST body
+func revokeToken(ctx context.Context, client *http.Client, token string) error {
+	body := strings.NewReader("token=" + token)
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://oauth2.googleapis.com/revoke", body)
+	if err != nil {
+		return fmt.Errorf("failed to create revocation request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("token revocation request failed: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("token revocation returned status %d", resp.StatusCode)
+	}
 
 	return nil
 }

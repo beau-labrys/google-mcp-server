@@ -17,6 +17,7 @@ import (
 type MCPServer struct {
 	config    *config.Config
 	services  map[string]ServiceHandler
+	toolMap   map[string]ServiceHandler // O(1) tool name → service lookup
 	conn      *jsonrpc2.Conn
 	mu        sync.RWMutex
 	tools     []Tool
@@ -69,6 +70,7 @@ func NewMCPServer(cfg *config.Config) *MCPServer {
 	return &MCPServer{
 		config:    cfg,
 		services:  make(map[string]ServiceHandler),
+		toolMap:   make(map[string]ServiceHandler),
 		tools:     []Tool{},
 		resources: []Resource{},
 	}
@@ -79,11 +81,18 @@ func (s *MCPServer) RegisterService(name string, handler ServiceHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if _, exists := s.services[name]; exists {
+		fmt.Fprintf(os.Stderr, "Warning: service %q already registered, overwriting\n", name)
+	}
+
 	s.services[name] = handler
 
-	// Add tools from the service
+	// Add tools from the service and build tool-to-service map for O(1) lookup
 	tools := handler.GetTools()
 	s.tools = append(s.tools, tools...)
+	for _, tool := range tools {
+		s.toolMap[tool.Name] = handler
+	}
 
 	// Add resources from the service
 	resources := handler.GetResources()
@@ -111,31 +120,42 @@ func (s *MCPServer) Start() error {
 	return nil
 }
 
+// Stop gracefully shuts down the MCP server
+func (s *MCPServer) Stop() error {
+	if s.conn != nil {
+		return s.conn.Close()
+	}
+	return nil
+}
+
 // NewlineDelimitedStream implements jsonrpc2.ObjectStream for newline-delimited JSON
 type NewlineDelimitedStream struct {
-	reader *bufio.Reader
-	writer io.Writer
-	mu     sync.Mutex
+	scanner *bufio.Scanner
+	writer  io.Writer
+	mu      sync.Mutex
 }
 
 // NewNewlineDelimitedStream creates a new newline-delimited JSON stream
 func NewNewlineDelimitedStream(r io.Reader, w io.Writer) *NewlineDelimitedStream {
+	scanner := bufio.NewScanner(r)
+	// Start with 64KB buffer, grow up to maxMessageSize; rejects oversized messages
+	// without allocating them fully (prevents OOM from malicious input)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxMessageSize)
 	return &NewlineDelimitedStream{
-		reader: bufio.NewReader(r),
-		writer: w,
+		scanner: scanner,
+		writer:  w,
 	}
 }
 
 // ReadObject reads a newline-delimited JSON object
 func (s *NewlineDelimitedStream) ReadObject(v interface{}) error {
-	line, err := s.reader.ReadBytes('\n')
-	if err != nil {
-		return err
+	if !s.scanner.Scan() {
+		if err := s.scanner.Err(); err != nil {
+			return err
+		}
+		return io.EOF
 	}
-	if len(line) > maxMessageSize {
-		return fmt.Errorf("message size %d exceeds maximum allowed size %d", len(line), maxMessageSize)
-	}
-	return json.Unmarshal(line, v)
+	return json.Unmarshal(s.scanner.Bytes(), v)
 }
 
 // WriteObject writes a newline-delimited JSON object
@@ -185,10 +205,12 @@ func (h *Handler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2
 	case "completion/complete":
 		h.handleCompletion(ctx, conn, req)
 	default:
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeMethodNotFound,
 			Message: fmt.Sprintf("method not found: %s", req.Method),
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 	}
 }
 
@@ -206,18 +228,22 @@ func (h *Handler) handleInitialize(ctx context.Context, conn *jsonrpc2.Conn, req
 	}
 
 	if req.Params == nil {
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeInvalidParams,
 			Message: "missing parameters",
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 		return
 	}
 
 	if err := json.Unmarshal(*req.Params, &params); err != nil {
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeInvalidParams,
 			Message: "invalid parameters",
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 		return
 	}
 
@@ -248,7 +274,9 @@ func (h *Handler) handleInitialize(ctx context.Context, conn *jsonrpc2.Conn, req
 	response.Capabilities.Tools = struct{}{}
 	response.Capabilities.Resources = struct{}{}
 
-	_ = conn.Reply(ctx, req.ID, response)
+	if err := conn.Reply(ctx, req.ID, response); err != nil {
+		fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+	}
 }
 
 func (h *Handler) handleToolsList(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
@@ -262,7 +290,9 @@ func (h *Handler) handleToolsList(ctx context.Context, conn *jsonrpc2.Conn, req 
 		Tools: tools,
 	}
 
-	_ = conn.Reply(ctx, req.ID, response)
+	if err := conn.Reply(ctx, req.ID, response); err != nil {
+		fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+	}
 }
 
 func (h *Handler) handleToolCall(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
@@ -272,53 +302,51 @@ func (h *Handler) handleToolCall(ctx context.Context, conn *jsonrpc2.Conn, req *
 	}
 
 	if req.Params == nil {
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeInvalidParams,
 			Message: "missing parameters",
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 		return
 	}
 
 	if err := json.Unmarshal(*req.Params, &params); err != nil {
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeInvalidParams,
 			Message: "invalid parameters",
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 		return
 	}
 
-	// Find the appropriate service handler
+	// Find the appropriate service handler via O(1) map lookup
 	h.server.mu.RLock()
-	var handler ServiceHandler
-	for _, service := range h.server.services {
-		tools := service.GetTools()
-		for _, tool := range tools {
-			if tool.Name == params.Name {
-				handler = service
-				break
-			}
-		}
-		if handler != nil {
-			break
-		}
-	}
+	handler, exists := h.server.toolMap[params.Name]
 	h.server.mu.RUnlock()
 
-	if handler == nil {
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+	if !exists {
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeMethodNotFound,
 			Message: fmt.Sprintf("tool not found: %s", params.Name),
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 		return
 	}
 
 	// Call the tool
 	result, err := handler.HandleToolCall(ctx, params.Name, params.Arguments)
 	if err != nil {
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+		// Log full error to stderr, return generic message to client
+		fmt.Fprintf(os.Stderr, "Error in tool %s: %v\n", params.Name, err)
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeInternalError,
-			Message: err.Error(),
-		})
+			Message: "internal error",
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 		return
 	}
 
@@ -360,7 +388,9 @@ func (h *Handler) handleToolCall(ctx context.Context, conn *jsonrpc2.Conn, req *
 		IsError: false,
 	}
 
-	_ = conn.Reply(ctx, req.ID, response)
+	if err := conn.Reply(ctx, req.ID, response); err != nil {
+		fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+	}
 }
 
 func (h *Handler) handleResourcesList(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
@@ -374,7 +404,9 @@ func (h *Handler) handleResourcesList(ctx context.Context, conn *jsonrpc2.Conn, 
 		Resources: resources,
 	}
 
-	_ = conn.Reply(ctx, req.ID, response)
+	if err := conn.Reply(ctx, req.ID, response); err != nil {
+		fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+	}
 }
 
 func (h *Handler) handleResourceRead(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
@@ -383,18 +415,22 @@ func (h *Handler) handleResourceRead(ctx context.Context, conn *jsonrpc2.Conn, r
 	}
 
 	if req.Params == nil {
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeInvalidParams,
 			Message: "missing parameters",
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 		return
 	}
 
 	if err := json.Unmarshal(*req.Params, &params); err != nil {
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeInvalidParams,
 			Message: "invalid parameters",
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 		return
 	}
 
@@ -416,20 +452,26 @@ func (h *Handler) handleResourceRead(ctx context.Context, conn *jsonrpc2.Conn, r
 	h.server.mu.RUnlock()
 
 	if handler == nil {
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeMethodNotFound,
 			Message: fmt.Sprintf("resource not found: %s", params.URI),
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 		return
 	}
 
 	// Read the resource
 	result, err := handler.HandleResourceCall(ctx, params.URI)
 	if err != nil {
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+		// Log full error to stderr, return generic message to client
+		fmt.Fprintf(os.Stderr, "Error reading resource %s: %v\n", params.URI, err)
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeInternalError,
-			Message: err.Error(),
-		})
+			Message: "internal error",
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 		return
 	}
 
@@ -453,7 +495,9 @@ func (h *Handler) handleResourceRead(ctx context.Context, conn *jsonrpc2.Conn, r
 		},
 	}
 
-	_ = conn.Reply(ctx, req.ID, response)
+	if err := conn.Reply(ctx, req.ID, response); err != nil {
+		fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+	}
 }
 
 func (h *Handler) handleCompletion(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
@@ -470,18 +514,22 @@ func (h *Handler) handleCompletion(ctx context.Context, conn *jsonrpc2.Conn, req
 	}
 
 	if req.Params == nil {
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeInvalidParams,
 			Message: "missing parameters",
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 		return
 	}
 
 	if err := json.Unmarshal(*req.Params, &params); err != nil {
-		_ = conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
+		if err := conn.ReplyWithError(ctx, req.ID, &jsonrpc2.Error{
 			Code:    jsonrpc2.CodeInvalidParams,
 			Message: "invalid parameters",
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+		}
 		return
 	}
 
@@ -498,5 +546,7 @@ func (h *Handler) handleCompletion(ctx context.Context, conn *jsonrpc2.Conn, req
 		},
 	}
 
-	_ = conn.Reply(ctx, req.ID, response)
+	if err := conn.Reply(ctx, req.ID, response); err != nil {
+		fmt.Fprintf(os.Stderr, "Error sending reply: %v\n", err)
+	}
 }

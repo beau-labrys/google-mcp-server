@@ -41,12 +41,12 @@ func NewClient(ctx context.Context, oauth *auth.OAuthClient) (*Client, error) {
 }
 
 // ListFiles lists files and folders
-func (c *Client) ListFiles(query string, pageSize int64, parentID string) ([]*drive.File, error) {
+func (c *Client) ListFiles(ctx context.Context, query string, pageSize int64, parentID string) ([]*drive.File, error) {
 	// Log the request for debugging
 	log.Printf("[Drive] ListFiles called with query=%q, pageSize=%d, parentID=%q", query, pageSize, parentID)
 
-	// Create a new context for the API call
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Apply timeout to caller's context
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	call := c.service.Files.List().
@@ -93,13 +93,17 @@ func (c *Client) ListFiles(query string, pageSize int64, parentID string) ([]*dr
 	return fileList.Files, nil
 }
 
-// escapeDriveQuery escapes single quotes in Drive query strings to prevent query injection
+// escapeDriveQuery escapes special characters in Drive query strings to prevent query injection.
+// Backslash must be escaped first to avoid double-escaping.
 func escapeDriveQuery(s string) string {
-	return strings.ReplaceAll(s, "'", "\\'")
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "'", "\\'")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	return s
 }
 
 // SearchFiles searches for files
-func (c *Client) SearchFiles(name, mimeType string, modifiedAfter string) ([]*drive.File, error) {
+func (c *Client) SearchFiles(ctx context.Context, name, mimeType string, modifiedAfter string) ([]*drive.File, error) {
 	query := ""
 	if name != "" {
 		query = fmt.Sprintf("name contains '%s'", escapeDriveQuery(name))
@@ -117,7 +121,7 @@ func (c *Client) SearchFiles(name, mimeType string, modifiedAfter string) ([]*dr
 		query += fmt.Sprintf("modifiedTime > '%s'", escapeDriveQuery(modifiedAfter))
 	}
 
-	return c.ListFiles(query, 100, "")
+	return c.ListFiles(ctx, query, 100, "")
 }
 
 // GetFile gets file metadata
@@ -131,17 +135,26 @@ func (c *Client) GetFile(fileID string) (*drive.File, error) {
 	return file, nil
 }
 
-// DownloadFile downloads a file
-func (c *Client) DownloadFile(fileID string, writer io.Writer) error {
-	resp, err := c.service.Files.Get(fileID).Download()
+// DownloadFile downloads a file with context support and bounded copy
+func (c *Client) DownloadFile(ctx context.Context, fileID string, writer io.Writer, maxSize int64) error {
+	resp, err := c.service.Files.Get(fileID).Context(ctx).Download()
 	if err != nil {
 		return fmt.Errorf("failed to download file: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close download body: %v\n", err)
+		}
+	}()
 
-	_, err = io.Copy(writer, resp.Body)
+	// Use LimitReader to prevent unbounded downloads
+	reader := io.LimitReader(resp.Body, maxSize+1)
+	n, err := io.Copy(writer, reader)
 	if err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
+	}
+	if n > maxSize {
+		return fmt.Errorf("download exceeded maximum size of %d bytes", maxSize)
 	}
 
 	return nil

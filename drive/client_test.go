@@ -62,6 +62,16 @@ func TestEscapeDriveQuery(t *testing.T) {
 			input:    "' or 1=1 or name contains '",
 			expected: "\\' or 1=1 or name contains \\'",
 		},
+		{
+			name:     "backslash escape bypass",
+			input:    "\\'",
+			expected: "\\\\\\'",
+		},
+		{
+			name:     "double quote",
+			input:    `file "name"`,
+			expected: `file \"name\"`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -400,15 +410,14 @@ This is a test document with **bold** text.`
 
 	file, err := client.UploadMarkdownAsDoc(context.Background(), "Test Document", markdown, "")
 	if err != nil {
-		// This is expected to fail with the mock setup, but we're testing the conversion logic
-		t.Logf("Upload failed as expected with mock: %v", err)
-	} else {
-		if file.Id != "test-file-id" {
-			t.Errorf("Expected file ID 'test-file-id', got %s", file.Id)
-		}
-		if file.Name != "Test Document" {
-			t.Errorf("Expected file name 'Test Document', got %s", file.Name)
-		}
+		// Mock may not perfectly simulate Google API; skip rather than silently pass
+		t.Skipf("Mock upload not fully supported: %v", err)
+	}
+	if file.Id != "test-file-id" {
+		t.Errorf("Expected file ID 'test-file-id', got %s", file.Id)
+	}
+	if file.Name != "Test Document" {
+		t.Errorf("Expected file name 'Test Document', got %s", file.Name)
 	}
 }
 
@@ -459,12 +468,11 @@ This is the updated content.`
 
 	file, err := client.ReplaceDocWithMarkdown(context.Background(), "test-file-id", markdown)
 	if err != nil {
-		// This is expected to fail with the mock setup, but we're testing the logic
-		t.Logf("Replace failed as expected with mock: %v", err)
-	} else {
-		if file.Id != "test-file-id" {
-			t.Errorf("Expected file ID 'test-file-id', got %s", file.Id)
-		}
+		// Mock may not perfectly simulate Google API; skip rather than silently pass
+		t.Skipf("Mock replace not fully supported: %v", err)
+	}
+	if file.Id != "test-file-id" {
+		t.Errorf("Expected file ID 'test-file-id', got %s", file.Id)
 	}
 }
 

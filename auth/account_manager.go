@@ -239,13 +239,11 @@ func (am *AccountManager) GetAccount(email string) (*Account, error) {
 		return nil, fmt.Errorf("account not found: %s", email)
 	}
 
-	// Update last used time
+	// Update last used time (synchronous to avoid race with goroutine after unlock)
 	account.LastUsed = time.Now()
-	go func() {
-		if err := am.saveAccount(account); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to update last used time for %s: %v\n", email, err)
-		}
-	}()
+	if err := am.saveAccount(account); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to update last used time for %s: %v\n", email, err)
+	}
 
 	return account, nil
 }
@@ -273,11 +271,9 @@ func (am *AccountManager) GetAccountForContext(ctx context.Context, hint string)
 		for email, account := range am.accounts {
 			if strings.Contains(hint, email) {
 				account.LastUsed = time.Now()
-				go func() {
-					if err := am.saveAccount(account); err != nil {
-						fmt.Fprintf(os.Stderr, "Warning: failed to update last used time for %s: %v\n", email, err)
-					}
-				}()
+				if err := am.saveAccount(account); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to update last used time for %s: %v\n", email, err)
+				}
 				return account, nil
 			}
 		}
@@ -286,14 +282,16 @@ func (am *AccountManager) GetAccountForContext(ctx context.Context, hint string)
 	// If hint contains a domain, try to match accounts from that domain
 	if strings.Contains(hint, ".") {
 		for email, account := range am.accounts {
-			domain := strings.Split(email, "@")[1]
+			parts := strings.SplitN(email, "@", 2)
+			if len(parts) < 2 {
+				continue
+			}
+			domain := parts[1]
 			if strings.Contains(hint, domain) {
 				account.LastUsed = time.Now()
-				go func() {
-					if err := am.saveAccount(account); err != nil {
-						fmt.Fprintf(os.Stderr, "Warning: failed to update last used time for %s: %v\n", email, err)
-					}
-				}()
+				if err := am.saveAccount(account); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to update last used time for %s: %v\n", email, err)
+				}
 				return account, nil
 			}
 		}
@@ -303,11 +301,9 @@ func (am *AccountManager) GetAccountForContext(ctx context.Context, hint string)
 	if len(am.accounts) == 1 {
 		for email, account := range am.accounts {
 			account.LastUsed = time.Now()
-			go func() {
-				if err := am.saveAccount(account); err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: failed to update last used time for %s: %v\n", email, err)
-				}
-			}()
+			if err := am.saveAccount(account); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to update last used time for %s: %v\n", email, err)
+			}
 			return account, nil
 		}
 	}
@@ -357,8 +353,11 @@ func (am *AccountManager) RefreshToken(ctx context.Context, email string) error 
 		return fmt.Errorf("failed to refresh token: %w", err)
 	}
 
+	// Re-acquire lock before writing token fields to prevent races
+	am.mu.Lock()
 	account.Token = newToken
 	account.OAuthClient.token = newToken
+	am.mu.Unlock()
 
 	return am.saveAccount(account)
 }

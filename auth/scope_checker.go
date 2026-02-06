@@ -65,8 +65,7 @@ func (e *ScopeError) Error() string {
 func (am *AccountManager) CheckScopes(ctx context.Context, account *Account, service string) error {
 	requiredScopes, ok := RequiredScopes[service]
 	if !ok {
-		// If no specific scopes defined for service, assume it's okay
-		return nil
+		return fmt.Errorf("unknown service %q: no scope requirements defined", service)
 	}
 
 	// Get current token scopes

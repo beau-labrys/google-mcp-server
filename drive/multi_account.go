@@ -114,7 +114,7 @@ func (mac *MultiAccountClient) SearchAcrossAccounts(ctx context.Context, query s
 
 			// SearchFiles expects (name, mimeType, modifiedAfter)
 			// For cross-account search, we'll use ListFiles with the query directly
-			files, err := client.ListFiles(query, pageSize, "")
+			files, err := client.ListFiles(ctx, query, pageSize, "")
 			if err != nil {
 				mu.Lock()
 				errors = append(errors, fmt.Errorf("%s: %w", email, err))
@@ -157,7 +157,7 @@ func (mac *MultiAccountClient) ListFilesAcrossAccounts(ctx context.Context, pare
 		go func(email string, client *Client) {
 			defer wg.Done()
 
-			files, err := client.ListFiles("", pageSize, parentID)
+			files, err := client.ListFiles(ctx, "", pageSize, parentID)
 			if err != nil {
 				mu.Lock()
 				errors = append(errors, fmt.Errorf("%s: %w", email, err))

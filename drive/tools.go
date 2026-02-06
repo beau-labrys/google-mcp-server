@@ -7,9 +7,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 
 	"go.ngs.io/google-mcp-server/server"
 )
+
+// validateID validates a resource ID (file, task list, permission, etc.)
+func validateID(id, name string) error {
+	if id == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	if len(id) > 256 {
+		return fmt.Errorf("%s is too long (max 256 characters)", name)
+	}
+	return nil
+}
 
 const (
 	// maxDownloadSize is the maximum allowed file size for downloads (100MB)
@@ -563,7 +575,7 @@ func (h *Handler) handleFilesList(ctx context.Context, parentID string, pageSize
 		pageSize = 100
 	}
 
-	files, err := h.client.ListFiles("", pageSize, parentID)
+	files, err := h.client.ListFiles(ctx, "", pageSize, parentID)
 	if err != nil {
 		return nil, err
 	}
@@ -574,7 +586,7 @@ func (h *Handler) handleFilesList(ctx context.Context, parentID string, pageSize
 }
 
 func (h *Handler) handleFilesSearch(ctx context.Context, name, mimeType, modifiedAfter string) (interface{}, error) {
-	files, err := h.client.SearchFiles(name, mimeType, modifiedAfter)
+	files, err := h.client.SearchFiles(ctx, name, mimeType, modifiedAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -585,6 +597,10 @@ func (h *Handler) handleFilesSearch(ctx context.Context, name, mimeType, modifie
 }
 
 func (h *Handler) handleFileDownload(ctx context.Context, fileID string) (interface{}, error) {
+	if err := validateID(fileID, "file_id"); err != nil {
+		return nil, err
+	}
+
 	// Check file size before downloading
 	fileMeta, err := h.client.GetFile(fileID)
 	if err != nil {
@@ -595,7 +611,7 @@ func (h *Handler) handleFileDownload(ctx context.Context, fileID string) (interf
 	}
 
 	var buf bytes.Buffer
-	err = h.client.DownloadFile(fileID, &buf)
+	err = h.client.DownloadFile(ctx, fileID, &buf, maxDownloadSize)
 	if err != nil {
 		return nil, err
 	}
@@ -609,7 +625,7 @@ func (h *Handler) handleFileDownload(ctx context.Context, fileID string) (interf
 }
 
 func (h *Handler) handleFileUpload(ctx context.Context, name, content, mimeType, parentID string) (interface{}, error) {
-	// Check content size before decoding
+	// Check encoded content size before decoding
 	if len(content) > maxUploadSize {
 		return nil, fmt.Errorf("content size %d bytes exceeds maximum upload size of %d bytes (50MB)", len(content), maxUploadSize)
 	}
@@ -622,6 +638,10 @@ func (h *Handler) handleFileUpload(ctx context.Context, name, content, mimeType,
 			// Try as plain text if base64 decode fails
 			reader = bytes.NewReader([]byte(content))
 		} else {
+			// Also check decoded size (base64 inflates by ~33%)
+			if len(decoded) > maxUploadSize {
+				return nil, fmt.Errorf("decoded content size %d bytes exceeds maximum upload size of %d bytes (50MB)", len(decoded), maxUploadSize)
+			}
 			reader = bytes.NewReader(decoded)
 		}
 	}
@@ -639,6 +659,9 @@ func (h *Handler) handleFileUpload(ctx context.Context, name, content, mimeType,
 }
 
 func (h *Handler) handleFileGetMetadata(ctx context.Context, fileID string) (interface{}, error) {
+	if err := validateID(fileID, "file_id"); err != nil {
+		return nil, err
+	}
 	file, err := h.client.GetFile(fileID)
 	if err != nil {
 		return nil, err
@@ -648,6 +671,9 @@ func (h *Handler) handleFileGetMetadata(ctx context.Context, fileID string) (int
 }
 
 func (h *Handler) handleFileUpdateMetadata(ctx context.Context, fileID, name, description string) (interface{}, error) {
+	if err := validateID(fileID, "file_id"); err != nil {
+		return nil, err
+	}
 	file, err := h.client.UpdateFileMetadata(fileID, name, description)
 	if err != nil {
 		return nil, err
@@ -666,6 +692,12 @@ func (h *Handler) handleFolderCreate(ctx context.Context, name, parentID string)
 }
 
 func (h *Handler) handleFileMove(ctx context.Context, fileID, newParentID string) (interface{}, error) {
+	if err := validateID(fileID, "file_id"); err != nil {
+		return nil, err
+	}
+	if err := validateID(newParentID, "new_parent_id"); err != nil {
+		return nil, err
+	}
 	file, err := h.client.MoveFile(fileID, newParentID)
 	if err != nil {
 		return nil, err
@@ -675,6 +707,9 @@ func (h *Handler) handleFileMove(ctx context.Context, fileID, newParentID string
 }
 
 func (h *Handler) handleFileCopy(ctx context.Context, fileID, newName string) (interface{}, error) {
+	if err := validateID(fileID, "file_id"); err != nil {
+		return nil, err
+	}
 	file, err := h.client.CopyFile(fileID, newName)
 	if err != nil {
 		return nil, err
@@ -684,6 +719,9 @@ func (h *Handler) handleFileCopy(ctx context.Context, fileID, newName string) (i
 }
 
 func (h *Handler) handleFileDelete(ctx context.Context, fileID string, confirm bool) (interface{}, error) {
+	if err := validateID(fileID, "file_id"); err != nil {
+		return nil, err
+	}
 	if !confirm {
 		return nil, fmt.Errorf("permanent deletion requires confirm=true. This action is irreversible")
 	}
@@ -697,6 +735,9 @@ func (h *Handler) handleFileDelete(ctx context.Context, fileID string, confirm b
 }
 
 func (h *Handler) handleFileTrash(ctx context.Context, fileID string) (interface{}, error) {
+	if err := validateID(fileID, "file_id"); err != nil {
+		return nil, err
+	}
 	err := h.client.TrashFile(fileID)
 	if err != nil {
 		return nil, err
@@ -706,6 +747,9 @@ func (h *Handler) handleFileTrash(ctx context.Context, fileID string) (interface
 }
 
 func (h *Handler) handleFileRestore(ctx context.Context, fileID string) (interface{}, error) {
+	if err := validateID(fileID, "file_id"); err != nil {
+		return nil, err
+	}
 	err := h.client.RestoreFile(fileID)
 	if err != nil {
 		return nil, err
@@ -715,6 +759,9 @@ func (h *Handler) handleFileRestore(ctx context.Context, fileID string) (interfa
 }
 
 func (h *Handler) handleSharedLinkCreate(ctx context.Context, fileID, role, permType string) (interface{}, error) {
+	if err := validateID(fileID, "file_id"); err != nil {
+		return nil, err
+	}
 	link, err := h.client.CreateShareLink(fileID, role, permType)
 	if err != nil {
 		return nil, err
@@ -735,6 +782,9 @@ func (h *Handler) handleSharedLinkCreate(ctx context.Context, fileID, role, perm
 }
 
 func (h *Handler) handlePermissionsList(ctx context.Context, fileID string) (interface{}, error) {
+	if err := validateID(fileID, "file_id"); err != nil {
+		return nil, err
+	}
 	permissions, err := h.client.ListPermissions(fileID)
 	if err != nil {
 		return nil, err
@@ -754,6 +804,9 @@ func (h *Handler) handlePermissionsList(ctx context.Context, fileID string) (int
 }
 
 func (h *Handler) handlePermissionsCreate(ctx context.Context, fileID, email, role string) (interface{}, error) {
+	if err := validateID(fileID, "file_id"); err != nil {
+		return nil, err
+	}
 	permission, err := h.client.CreatePermission(fileID, email, role)
 	if err != nil {
 		return nil, err
@@ -768,6 +821,12 @@ func (h *Handler) handlePermissionsCreate(ctx context.Context, fileID, email, ro
 }
 
 func (h *Handler) handlePermissionsDelete(ctx context.Context, fileID, permissionID string) (interface{}, error) {
+	if err := validateID(fileID, "file_id"); err != nil {
+		return nil, err
+	}
+	if err := validateID(permissionID, "permission_id"); err != nil {
+		return nil, err
+	}
 	err := h.client.DeletePermission(fileID, permissionID)
 	if err != nil {
 		return nil, err
@@ -779,16 +838,28 @@ func (h *Handler) handlePermissionsDelete(ctx context.Context, fileID, permissio
 // formatFile formats a drive file for response
 func formatFile(file interface{}) map[string]interface{} {
 	data := make(map[string]interface{})
-	jsonData, _ := json.Marshal(file)
-	_ = json.Unmarshal(jsonData, &data)
+	jsonData, err := json.Marshal(file)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to marshal file data: %v\n", err)
+		return data
+	}
+	if err := json.Unmarshal(jsonData, &data); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to unmarshal file data: %v\n", err)
+	}
 	return data
 }
 
 // formatFiles formats multiple drive files for response
 func formatFiles(files interface{}) []map[string]interface{} {
 	var result []map[string]interface{}
-	jsonData, _ := json.Marshal(files)
-	_ = json.Unmarshal(jsonData, &result)
+	jsonData, err := json.Marshal(files)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to marshal files data: %v\n", err)
+		return result
+	}
+	if err := json.Unmarshal(jsonData, &result); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to unmarshal files data: %v\n", err)
+	}
 	return result
 }
 

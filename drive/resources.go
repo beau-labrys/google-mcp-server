@@ -61,7 +61,7 @@ func (h *Handler) HandleResourceCall(ctx context.Context, uri string) (interface
 }
 
 func (h *Handler) getRootFiles(ctx context.Context) (interface{}, error) {
-	files, err := h.client.ListFiles("'root' in parents and trashed = false", 100, "")
+	files, err := h.client.ListFiles(ctx, "'root' in parents and trashed = false", 100, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root files: %w", err)
 	}
@@ -74,7 +74,7 @@ func (h *Handler) getRootFiles(ctx context.Context) (interface{}, error) {
 }
 
 func (h *Handler) getRecentFiles(ctx context.Context) (interface{}, error) {
-	files, err := h.client.ListFiles("trashed = false", 20, "")
+	files, err := h.client.ListFiles(ctx, "trashed = false", 20, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recent files: %w", err)
 	}
@@ -87,7 +87,7 @@ func (h *Handler) getRecentFiles(ctx context.Context) (interface{}, error) {
 }
 
 func (h *Handler) getStarredFiles(ctx context.Context) (interface{}, error) {
-	files, err := h.client.ListFiles("starred = true and trashed = false", 100, "")
+	files, err := h.client.ListFiles(ctx, "starred = true and trashed = false", 100, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get starred files: %w", err)
 	}
@@ -100,7 +100,7 @@ func (h *Handler) getStarredFiles(ctx context.Context) (interface{}, error) {
 }
 
 func (h *Handler) getTrashedFiles(ctx context.Context) (interface{}, error) {
-	files, err := h.client.ListFiles("trashed = true", 100, "")
+	files, err := h.client.ListFiles(ctx, "trashed = true", 100, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get trashed files: %w", err)
 	}
