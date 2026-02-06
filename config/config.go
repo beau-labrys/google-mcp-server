@@ -25,6 +25,7 @@ type ServicesConfig struct {
 	Sheets   SheetsConfig   `json:"sheets"`
 	Docs     DocsConfig     `json:"docs"`
 	Slides   SlidesConfig   `json:"slides"`
+	Tasks    TasksConfig    `json:"tasks"`
 }
 
 // AccountsConfig represents Accounts service configuration
@@ -81,6 +82,12 @@ type SlidesConfig struct {
 	SlideHeight     int  `json:"slide_height,omitempty"`
 }
 
+// TasksConfig represents Tasks service configuration
+type TasksConfig struct {
+	Enabled       bool   `json:"enabled"`
+	DefaultListID string `json:"default_list_id,omitempty"`
+}
+
 // GlobalConfig represents global configuration
 type GlobalConfig struct {
 	LogLevel       string `json:"log_level,omitempty"`
@@ -102,6 +109,7 @@ func Load() (*Config, error) {
 			Sheets:   SheetsConfig{Enabled: true},
 			Docs:     DocsConfig{Enabled: true},
 			Slides:   SlidesConfig{Enabled: true},
+			Tasks:    TasksConfig{Enabled: true},
 		},
 		Global: GlobalConfig{
 			LogLevel:       "info",
@@ -178,6 +186,9 @@ func (c *Config) loadFromEnv() error {
 	if os.Getenv("DISABLE_SLIDES") == "true" {
 		c.Services.Slides.Enabled = false
 	}
+	if os.Getenv("DISABLE_TASKS") == "true" {
+		c.Services.Tasks.Enabled = false
+	}
 
 	// Global settings
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
@@ -214,7 +225,8 @@ func (c *Config) validate() error {
 		!c.Services.Gmail.Enabled &&
 		!c.Services.Sheets.Enabled &&
 		!c.Services.Docs.Enabled &&
-		!c.Services.Slides.Enabled {
+		!c.Services.Slides.Enabled &&
+		!c.Services.Tasks.Enabled {
 		return fmt.Errorf("at least one service must be enabled")
 	}
 
@@ -311,6 +323,9 @@ func SaveExample(path string) error {
 				DefaultFontSize: 14,
 				SlideWidth:      720,
 				SlideHeight:     405,
+			},
+			Tasks: TasksConfig{
+				Enabled: true,
 			},
 		},
 		Global: GlobalConfig{

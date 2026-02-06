@@ -13,6 +13,7 @@ This guide will help you resolve the 403 access_denied error when authenticating
    - **Gmail API**
    - **Google Sheets API**
    - **Google Docs API**
+   - **Google Tasks API**
 
 ## Step 2: Configure OAuth Consent Screen
 
@@ -44,6 +45,7 @@ Click **SAVE AND CONTINUE**
    - `https://www.googleapis.com/auth/gmail.modify`
    - `https://www.googleapis.com/auth/spreadsheets`
    - `https://www.googleapis.com/auth/documents`
+   - `https://www.googleapis.com/auth/tasks`
    - `https://www.googleapis.com/auth/userinfo.email`
    - `https://www.googleapis.com/auth/userinfo.profile`
    - `openid`
@@ -85,7 +87,8 @@ Create or edit `~/.google-mcp-server/config.json`:
     "drive": {"enabled": true},
     "gmail": {"enabled": true},
     "sheets": {"enabled": true},
-    "docs": {"enabled": true}
+    "docs": {"enabled": true},
+    "tasks": {"enabled": true}
   }
 }
 ```

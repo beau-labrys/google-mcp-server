@@ -33,6 +33,9 @@ var RequiredScopes = map[string][]string{
 	"slides": {
 		"https://www.googleapis.com/auth/presentations",
 	},
+	"tasks": {
+		"https://www.googleapis.com/auth/tasks",
+	},
 }
 
 // ScopeError represents an error when required scopes are missing

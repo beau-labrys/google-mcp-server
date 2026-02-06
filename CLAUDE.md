@@ -41,6 +41,7 @@ go build -o google-mcp-server .
 - **Calendar Service** (`calendar/`): All 8 tools + multi-account support via `calendar/multi_account.go`
 - **Drive Service** (`drive/`): All 19 tools including Markdown support + multi-account support via `drive/multi_account.go`
 - **Gmail Service** (`gmail/`): 3 core tools + multi-account support via `gmail/multi_account.go`
+- **Tasks Service** (`tasks/`): 14 tools for task list and task management + multi-account support via `tasks/multi_handler.go`
 - **Account Management** (`accounts/`): 5 tools for managing multiple Google accounts
 
 ### Basic Implementation
@@ -73,10 +74,11 @@ make test-coverage
 ## API Rate Limits to Consider
 
 - **Calendar**: 1,000,000 queries/day
-- **Drive**: 1,000,000,000 queries/day  
+- **Drive**: 1,000,000,000 queries/day
 - **Gmail**: 250 quota units/user/second
 - **Sheets**: 100 requests/100 seconds
 - **Docs**: 60 requests/minute
+- **Tasks**: 50,000 queries/day per user
 
 Always implement exponential backoff for rate limit errors.
 
@@ -141,6 +143,7 @@ Always implement exponential backoff for rate limit errors.
 ├── gmail/          # Gmail service with multi-account support
 ├── sheets/         # Sheets service (needs expansion)
 ├── docs/           # Docs service (needs expansion)
+├── tasks/          # Google Tasks service with multi-account support
 ├── server/         # MCP server implementation
 ├── config/         # Configuration management
 └── main.go         # Entry point

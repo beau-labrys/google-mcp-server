@@ -18,6 +18,7 @@ import (
 	"go.ngs.io/google-mcp-server/server"
 	"go.ngs.io/google-mcp-server/sheets"
 	"go.ngs.io/google-mcp-server/slides"
+	"go.ngs.io/google-mcp-server/tasks"
 )
 
 func main() {
@@ -214,6 +215,28 @@ func registerServices(ctx context.Context, srv *server.MCPServer, accountManager
 
 		srv.RegisterService("slides", slidesHandler)
 		log.Println("[DEBUG] Slides service registered with multi-account support")
+	}
+
+	// Initialize and register Tasks service with multi-account support
+	if cfg.Services.Tasks.Enabled {
+		log.Println("[DEBUG] Initializing Tasks service...")
+		var tasksClient *tasks.Client
+		if oauth != nil {
+			initCtx, cancel := context.WithTimeout(ctx, initTimeout)
+			var err error
+			tasksClient, err = tasks.NewClient(initCtx, oauth)
+			cancel()
+			if err != nil {
+				log.Printf("[WARNING] Failed to initialize default Tasks client: %v\n", err)
+				tasksClient = nil
+			}
+		}
+		// Use multi-account handler
+		tasksHandler := tasks.NewMultiAccountHandler(accountManager, tasksClient)
+		srv.RegisterService("tasks", tasksHandler)
+		log.Println("[DEBUG] Tasks service registered with multi-account support")
+		// Add delay before next service
+		time.Sleep(serviceDelay)
 	}
 
 	return nil

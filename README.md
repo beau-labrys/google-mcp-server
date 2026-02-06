@@ -1,11 +1,11 @@
 # Google MCP Server
 
-A Model Context Protocol (MCP) server that integrates with Google APIs (Calendar, Drive, Gmail, Sheets, Docs) to provide seamless access to Google services through MCP-compatible clients.
+A Model Context Protocol (MCP) server that integrates with Google APIs (Calendar, Drive, Gmail, Sheets, Docs, Tasks) to provide seamless access to Google services through MCP-compatible clients.
 
 ## Features
 
 - **Multiple Account Support**: Manage multiple Google accounts with automatic context-aware selection
-- **Multi-Service Support**: Integrated support for Google Calendar, Drive, Gmail, Sheets, and Docs
+- **Multi-Service Support**: Integrated support for Google Calendar, Drive, Gmail, Sheets, Docs, Slides, and Tasks
 - **OAuth 2.0 Authentication**: Secure authentication with automatic token refresh
 - **MCP Protocol Compliant**: Fully compliant with the Model Context Protocol specification
 - **Cross-Platform**: Works on Windows, macOS, and Linux
@@ -83,6 +83,7 @@ Download pre-built binaries from the [releases page](https://github.com/ngs/goog
      - Google Sheets API
      - Google Docs API
      - Google Slides API
+     - Google Tasks API
 
 2. **Create OAuth 2.0 Credentials**
    - In Google Cloud Console, go to "APIs & Services" > "Credentials"
@@ -107,7 +108,8 @@ Download pre-built binaries from the [releases page](https://github.com/ngs/goog
        "gmail": {"enabled": true},
        "sheets": {"enabled": true},
        "docs": {"enabled": true},
-       "slides": {"enabled": true}
+       "slides": {"enabled": true},
+       "tasks": {"enabled": true}
      }
    }
    ```
@@ -201,6 +203,22 @@ Download pre-built binaries from the [releases page](https://github.com/ngs/goog
 - `slides_export_pdf` - Export presentation as PDF (supports `account` parameter)
 - `slides_share` - Create shareable link (supports `account` parameter)
 
+### Google Tasks
+- `tasks_list_tasklists` - List all task lists (supports `account` parameter)
+- `tasks_list_tasklists_all_accounts` - List task lists from all authenticated accounts
+- `tasks_get_tasklist` - Get details of a specific task list (supports `account` parameter)
+- `tasks_create_tasklist` - Create a new task list (supports `account` parameter)
+- `tasks_update_tasklist` - Update an existing task list (supports `account` parameter)
+- `tasks_delete_tasklist` - Delete a task list (supports `account` parameter)
+- `tasks_list_tasks` - List tasks in a task list (supports `account` parameter)
+- `tasks_get_task` - Get details of a specific task (supports `account` parameter)
+- `tasks_create_task` - Create a new task with title, notes, due date, and parent (supports `account` parameter)
+- `tasks_update_task` - Update task properties (supports `account` parameter)
+- `tasks_delete_task` - Delete a task (supports `account` parameter)
+- `tasks_complete_task` - Mark a task as completed (supports `account` parameter)
+- `tasks_move_task` - Reorder or reparent a task (supports `account` parameter)
+- `tasks_clear_completed` - Remove all completed tasks from a list (supports `account` parameter)
+
 ## Usage Examples
 
 ### Multi-Account Support
@@ -225,7 +243,7 @@ The server supports managing multiple Google accounts simultaneously with automa
 4. **Cross-account operations**:
    - Use `*_list_all_accounts` tools to search across all authenticated accounts
    - Results are organized by account for clarity
-   - Supported for Calendar (`calendar_events_list_all_accounts`), Gmail (`gmail_messages_list_all_accounts`), and Drive (`drive_files_list_all_accounts`)
+   - Supported for Calendar (`calendar_events_list_all_accounts`), Gmail (`gmail_messages_list_all_accounts`), Drive (`drive_files_list_all_accounts`), and Tasks (`tasks_list_tasklists_all_accounts`)
 
 ### With Claude Desktop
 

@@ -11,6 +11,7 @@
       "https://www.googleapis.com/auth/photoslibrary",
       "https://www.googleapis.com/auth/spreadsheets",
       "https://www.googleapis.com/auth/documents",
+      "https://www.googleapis.com/auth/tasks",
       "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/userinfo.profile"
     ]
@@ -50,6 +51,9 @@
     "docs": {
       "enabled": true,
       "default_format": "text"
+    },
+    "tasks": {
+      "enabled": true
     }
   },
   "global": {
