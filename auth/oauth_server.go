@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"net"
 	"net/http"
 	"os"
@@ -139,6 +140,9 @@ func (s *OAuthCallbackServer) handleCallback(w http.ResponseWriter, r *http.Requ
 			errMsg = "no authorization code received"
 		}
 
+		// Escape error message to prevent reflected XSS
+		safeErrMsg := html.EscapeString(errMsg)
+
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
@@ -154,7 +158,7 @@ func (s *OAuthCallbackServer) handleCallback(w http.ResponseWriter, r *http.Requ
     <p>Error: %s</p>
     <p>Please close this window and try again.</p>
 </body>
-</html>`, errMsg)
+</html>`, safeErrMsg)
 
 		s.errorChan <- fmt.Errorf("OAuth error: %s", errMsg)
 		return

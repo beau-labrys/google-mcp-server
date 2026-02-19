@@ -104,6 +104,18 @@ func (am *AccountManager) loadAccounts(ctx context.Context) error {
 		tokenFile := filepath.Join(am.configDir, file.Name())
 		// Clean the path to satisfy gosec G304
 		tokenFile = filepath.Clean(tokenFile)
+
+		// Check file permissions before reading (token files should be 0600)
+		info, err := os.Stat(tokenFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to stat token file %s: %v\n", tokenFile, err)
+			continue
+		}
+		if perm := info.Mode().Perm(); perm != 0600 {
+			fmt.Fprintf(os.Stderr, "Warning: token file %s has insecure permissions %o (expected 0600), skipping\n", tokenFile, perm)
+			continue
+		}
+
 		data, err := os.ReadFile(tokenFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to read token file %s: %v\n", tokenFile, err)

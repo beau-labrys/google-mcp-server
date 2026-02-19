@@ -11,7 +11,6 @@ import (
 
 	"go.ngs.io/google-mcp-server/auth"
 	"go.ngs.io/google-mcp-server/server"
-	"golang.org/x/oauth2"
 )
 
 // Handler implements account management tools
@@ -262,8 +261,8 @@ func (h *Handler) handleAccountsAdd(ctx context.Context) (interface{}, error) {
 	// Wait a moment for server to start
 	time.Sleep(100 * time.Millisecond)
 
-	// Return the auth URL for the user to open
-	authURL := config.AuthCodeURL("state", oauth2.AccessTypeOffline)
+	// Return the auth URL for the user to open (uses the cryptographically random state from callbackServer)
+	authURL := callbackServer.GetAuthURL()
 
 	return map[string]interface{}{
 		"message":      "OAuth server started. Please open the URL below in your browser to authenticate",

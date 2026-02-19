@@ -55,7 +55,7 @@ func (c *Client) ListFiles(ctx context.Context, query string, pageSize int64, pa
 	// Build the query
 	finalQuery := query
 	if parentID != "" {
-		parentQuery := fmt.Sprintf("'%s' in parents", parentID)
+		parentQuery := fmt.Sprintf("'%s' in parents", escapeDriveQuery(parentID))
 		if finalQuery != "" {
 			finalQuery = finalQuery + " and " + parentQuery
 		} else {

@@ -41,6 +41,10 @@ Thumbs.db
 token.json
 credentials.json
 
+# Configuration files (may contain client_id/client_secret)
+config.json
+config.local.json
+
 # Test coverage
 coverage.txt
 coverage.html
